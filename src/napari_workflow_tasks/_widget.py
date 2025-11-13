@@ -25,8 +25,14 @@ from napari.qt.threading import thread_worker
 
 from pathlib import Path
 
+from .io_utils import PackageImporter
+
+from .pixi_utils import pixi_runner
+
 if TYPE_CHECKING:
     import napari
+
+# from io_utils import PackageImporter
 
 # TODO: Automatically decide what properties to ignore based on MANIFEST
 IGNORE_PROPERTIES = ['zarr_url', 'channels_to_include', 'channels_to_exclude', 'measure_texture'] #, 'channel'
@@ -39,7 +45,11 @@ def wipe_cache():
     cache = resize_dask_cache(nbytes=0)
     cache = resize_dask_cache(nbytes=cache_bytes)
 
-def abspath(root, relpath):
+def abspath(
+    root,
+    relpath
+):
+
     root = Path(root)
     if root.is_dir():
         path = root/relpath
@@ -52,15 +62,18 @@ class FractalTaskManager:
     def __init__(self):
         self.tasks = dict()
 
-    def add_task(self,
-                 name,
-                 parent_dir,
-                 executable_parallel,
-                 properties,
-                 defs,
-                 required,
-                 type,
-                 title):
+    def add_task(
+        self,
+        name,
+        parent_dir,
+        executable_parallel,
+        properties,
+        defs,
+        required,
+        type,
+        title
+    ):
+
 
         task_dict = dict(
             title=title,
@@ -74,35 +87,54 @@ class FractalTaskManager:
         )
         self.tasks[name] = task_dict
 
-    def get_executable_path(self,
-                            name):
+    def get_executable_path(
+        self,
+        name
+    ):
         parent_dir = self.tasks[name]['parent_dir']
         exec_fname = self.tasks[name]['executable_parallel']
 
         return os.path.join(parent_dir, exec_fname)
 
-    def get_path_to_json(self,
-                         name):
+    def get_parent_dir(
+        self,
+        name
+    ):
+
+        return self.tasks[name]['parent_dir']
+
+    def get_path_to_json(
+        self,
+        name
+    ):
 
         parent_dir = self.tasks[name]['parent_dir']
         title = self.tasks[name]['title']
         return os.path.join(parent_dir, f'{title}.json')
 
-    def get_task(self,
-                 name):
+    def get_task(
+        self,
+        name
+    ):
         return self.tasks[name]
 
-    def get_properties(self,
-                       name):
+    def get_properties(
+        self,
+        name
+    ):
         return self.tasks[name]['properties']
 
-    def get_defs(self,
-                 name):
+    def get_defs(
+        self,
+        name
+    ):
         return self.tasks[name]['defs']
 
-    def write_to_json(self,
-                      name):
-
+    def write_to_json(
+        self,
+        name
+    ):
+        # Write json to ".napari_workflow_tasks" directory inside "params" directory 
         parent_dir = self.tasks[name]['parent_dir']
         title = self.tasks[name]['title']
         path_to_json = os.path.join(parent_dir, f'{title}.json')
@@ -115,14 +147,19 @@ class FractalTaskManager:
         with open(path_to_json, 'w') as f:
             json.dump(args_dict, f)
 
-    def get_title(self,
-                  name):
+    def get_title(
+        self,
+        name
+    ):
+
         return self.tasks[name]['title']
 
-    def update_task_property(self,
-                             name,
-                             property,
-                             value):
+    def update_task_property(
+        self,
+        name,
+        property,
+        value
+    ):
 
         print('Property dict updated', name, property, value)
         try:
@@ -130,18 +167,27 @@ class FractalTaskManager:
         except KeyError:
             print(f'Property {property} not defined in MANIFEST')
 
-    def add_widget_dict(self,
-                        name,
-                        widget_dict):
+    def add_widget_dict(
+        self,
+        name,
+        widget_dict
+    ):
+
         self.tasks[name]['widget_dict'] = widget_dict
 
-    def remove_widget_dict(self,
-                           name):
+    def remove_widget_dict(
+        self,
+        name
+    ):
+
         self.tasks[name]['widge_dict'] = dict()
 
-    def get_widget_value(self,
-                         name,
-                         property):
+    def get_widget_value(
+        self,
+        name,
+        property
+    ):
+
         widget = self.tasks[name]['widget_dict'][property]
 
         if isinstance(widget, QLineEdit):
@@ -245,6 +291,7 @@ class TaskWorker(QObject):
 
         return task_name
 
+
 class TasksQWidget(QWidget):
     def __init__(self, napari_viewer):
         super().__init__()
@@ -254,6 +301,9 @@ class TasksQWidget(QWidget):
 
         ### Dictionary of TaskManager
         self.task_manager = FractalTaskManager()
+
+        ### Add PackageImporter
+        self.package_importer = PackageImporter()
 
         ### Core widget components
         self.main_container = QWidget()
@@ -338,13 +388,22 @@ class TasksQWidget(QWidget):
                 self._image_layers.addItem(layer.name)
 
     def _select_workflow_file(self):
-        path_to_workflow = QFileDialog().getOpenFileName(self, "Select workflow file", ".",
-                                                         "workflow specs (*.json)")[0]
+        # Open workflow package with PackageImporter
+
+        path_to_package = QFileDialog().getOpenFileName(self, "Select workflow package", ".",
+                                                         "workflow specs (*.tar.gz)")[0]
+
+        self.package_importer.open_package(path_to_package)
+
+        path_to_workflow = self.package_importer.loaded_packages[self.package_importer.package_name]['manifest_path']
 
         workflow_args = self._get_json_params(path_to_workflow)
 
         for task in workflow_args["task_list"]:
-            if task.get("category") in INCLUDE_CATEGORIES:
+            # if task.get("category") in INCLUDE_CATEGORIES:
+            is_parallel = True if task['type'] == "parallel" else False
+
+            if is_parallel:
                 self.workflow_combo_box.addItem(task["name"])
                 self.task_manager.add_task(name=task["name"],
                                            parent_dir=os.path.split(path_to_workflow)[0],
