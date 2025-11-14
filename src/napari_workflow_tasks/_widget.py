@@ -568,6 +568,8 @@ class TasksQWidget(QWidget):
         # p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}', shell=True) #Pass wrapper_args: path to executable
         # print(f'pixi run --manifest-path {manifest_path} python {path_to_executable} --args-json {path_to_task_args} --out-json out-json-file.json')
         # p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}', shell=True) #Pass wrapper_args: path to executable
+        if os.path.exists(os.path.join(os.path.split(path_to_task_args)[0], "out_file.json")):
+            os.remove(os.path.join(os.path.split(path_to_task_args)[0], "out_file.json"))
         p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {path_to_executable} --args-json {path_to_task_args} --out-json {os.path.join(os.path.split(path_to_task_args)[0], "out_file.json")}', shell=True) #Pass wrapper_args: path to executable
 
         p.wait()
@@ -812,16 +814,15 @@ class TasksQWidget(QWidget):
         # Save to table
         ome_zarr = open_ome_zarr_container(image_layer.source.path)
         roi_table_crops = RoiTable(rois=cropped_rois)
-        ome_zarr.add_table(table_name, roi_table_crops, overwrite=overwrite,
-                           backend="experimental_csv_v1")
+        ome_zarr.add_table(table_name, roi_table_crops, overwrite=overwrite)
 
         # Just for testing
-        imgs = ome_zarr.get_image("0")
-        pixel_sizes = imgs.pixel_size.zyx
-        for roi in roi_table_crops.rois():
-            cropped_img = imgs.get_roi_as_numpy(roi, c=0)
-            # add to viewer
-            self._viewer.add_image(cropped_img, name=f"Cropped_FOV_ROI_{roi.name}",
-                                   scale=pixel_sizes, blending="additive")
-        
+        # imgs = ome_zarr.get_image("0")
+        # pixel_sizes = imgs.pixel_size.zyx
+        # for roi in roi_table_crops.rois():
+        #     cropped_img = imgs.get_roi_as_numpy(roi, c=0)
+        #     # add to viewer
+        #     self._viewer.add_image(cropped_img, name=f"Cropped_FOV_ROI_{roi.name}",
+        #                            scale=pixel_sizes, blending="additive")
+
         logger.info(f"Finished cropping {image_name} to ROI(s).")
