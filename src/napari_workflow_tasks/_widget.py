@@ -152,6 +152,8 @@ class FractalTaskManager:
         for prop_key in self.tasks[name]['properties'].keys():
             if 'value' in self.tasks[name]['properties'][prop_key]:
                 args_dict[prop_key] = self.tasks[name]['properties'][prop_key]['value']
+                if isinstance(args_dict[prop_key], dict):
+                    args_dict[prop_key] = args_dict[prop_key]['args']
 
         with open(path_to_json, 'w') as f:
             json.dump(args_dict, f)
@@ -505,8 +507,10 @@ class TasksQWidget(QWidget):
 
         path_to_task_args = self.task_manager.get_path_to_json(task_name)
 
-        print(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}')
-        p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}', shell=True) #Pass wrapper_args: path to executable
+        print(f'pixi run --manifest-path {manifest_path} python {path_to_executable} --args-json {path_to_task_args} --out-json out-json-file.json')
+        # p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}', shell=True) #Pass wrapper_args: path to executable
+        p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {path_to_executable} --args-json {path_to_task_args} --out-json {os.path.join(os.path.split(path_to_task_args)[0], "out_file.json")}', shell=True) #Pass wrapper_args: path to executable
+
         p.wait()
 
         print('Finished running subprocess')
