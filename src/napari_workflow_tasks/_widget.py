@@ -65,6 +65,7 @@ class FractalTaskManager:
     def add_task(
         self,
         name,
+        package_name,
         parent_dir,
         executable_parallel,
         properties,
@@ -77,6 +78,7 @@ class FractalTaskManager:
 
         task_dict = dict(
             title=title,
+            package_name=package_name,
             parent_dir=parent_dir,
             executable_parallel=executable_parallel,
             properties=properties,
@@ -95,6 +97,13 @@ class FractalTaskManager:
         exec_fname = self.tasks[name]['executable_parallel']
 
         return os.path.join(parent_dir, exec_fname)
+
+    def get_package_name(
+        self,
+        name
+    ):
+
+        return self.tasks[name]['package_name']
 
     def get_parent_dir(
         self,
@@ -134,7 +143,7 @@ class FractalTaskManager:
         self,
         name
     ):
-        # Write json to ".napari_workflow_tasks" directory inside "params" directory 
+        # Write json to ".napari_workflow_tasks" directory inside "params" directory
         parent_dir = self.tasks[name]['parent_dir']
         title = self.tasks[name]['title']
         path_to_json = os.path.join(parent_dir, f'{title}.json')
@@ -252,6 +261,16 @@ class TaskWorker(QObject):
     progress = pyqtSignal(int)
 
     @property
+    def manifest_path(self):
+        return self._manifest_path
+
+    @manifest_path.setter
+    def manifest_path(self, path):
+        # Add checks for validity
+        print(f'Set manifest_path as {path}')
+        self._manifest_path = path
+
+    @property
     def task_name(self):
         return self._task_name
 
@@ -284,7 +303,7 @@ class TaskWorker(QObject):
 
         path_to_task_args = self.task_manager.get_path_to_json(task_name)
 
-        p = subprocess.Popen(['python', os.path.join(os.path.dirname(__file__), 'task_wrapper.py'), '--executable', path_to_executable, '--path_to_task_args', path_to_task_args]) #Pass wrapper_args: path to executable
+        p = subprocess.Popen(['pixi', 'run', '--manifest-path', self.manifest_path, os.path.join(os.path.dirname(__file__), 'task_wrapper.py'), '--executable', path_to_executable, '--path_to_task_args', path_to_task_args]) #Pass wrapper_args: path to executable
         p.wait()
 
         print('Finished running subprocess')
@@ -397,6 +416,8 @@ class TasksQWidget(QWidget):
 
         path_to_workflow = self.package_importer.loaded_packages[self.package_importer.package_name]['manifest_path']
 
+        print(os.path.split(path_to_workflow)[0])
+
         workflow_args = self._get_json_params(path_to_workflow)
 
         for task in workflow_args["task_list"]:
@@ -406,6 +427,7 @@ class TasksQWidget(QWidget):
             if is_parallel:
                 self.workflow_combo_box.addItem(task["name"])
                 self.task_manager.add_task(name=task["name"],
+                                           package_name=self.package_importer.package_name,
                                            parent_dir=os.path.split(path_to_workflow)[0],
                                            executable_parallel=task["executable_parallel"],
                                            properties=task["args_schema_parallel"]["properties"],
@@ -474,16 +496,32 @@ class TasksQWidget(QWidget):
         #   create new thread
         self._update_execute_buttons(is_enabled=False)
 
-        self.thread = QThread(parent=self)
-        self.worker = TaskWorker()
-        self.worker.task_name = task_name
-        self.worker.task_manager = self.task_manager
-        self.worker.moveToThread(self.thread)
 
-        self.thread.started.connect(self.worker.run)
-        self.worker.finished.connect(self._fetch_subprocess_output)
+        package_name = self.task_manager.get_package_name(task_name)
+        manifest_path = self.package_importer.loaded_packages[package_name]['pixi_manifest_path']
+        print('Launching subprocess...')
+        path_to_executable = self.task_manager.get_executable_path(task_name)
+        print(path_to_executable)
 
-        self.thread.start()
+        path_to_task_args = self.task_manager.get_path_to_json(task_name)
+
+        print(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}')
+        p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}', shell=True) #Pass wrapper_args: path to executable
+        p.wait()
+
+        print('Finished running subprocess')
+        self._fetch_subprocess_output(task_name)
+        # self.thread = QThread(parent=self)
+        # self.worker = TaskWorker()
+        # self.worker.task_name = task_name
+        # self.worker.manifest_path = self.package_importer.loaded_packages[package_name]['pixi_manifest_path']
+        # self.worker.task_manager = self.task_manager
+        # self.worker.moveToThread(self.thread)
+        #
+        # self.thread.started.connect(self.worker.run)
+        # self.worker.finished.connect(self._fetch_subprocess_output)
+        #
+        # self.thread.start()
         # QLabel describing state of progress
         # self.thread.finished.connect(
         #     lambda: self.stepLabel.setText("Long-Running Step: 0")

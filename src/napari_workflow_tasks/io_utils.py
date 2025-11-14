@@ -2,8 +2,12 @@
 
 import os
 import tarfile
-import tomllib
+try:
+    import tomllib
+except:
+    import pip._vendor.tomli as tomllib
 from pathlib import Path
+import subprocess
 
 class PackageImporter:
     """
@@ -37,19 +41,57 @@ class PackageImporter:
         """
 
         file = tarfile.open(fpath)
-
         file.extractall(self.wf_dir)
         file.close()
 
         self.package_name = '.'.join(os.path.basename(fpath).split('.')[:-2])
+        toml_data = self._open_toml_file()
+        self.src_path, manifest_path = self._get_paths(toml_data)
 
-        print(self.package_name)
+        in_pixi_env = False
+        if not self._toml_has_pixi(toml_data):
+            pixi_manifest_path = self._make_pixi_env()
+        else:
+            pixi_manifest_path = manifest_path
 
+        self.loaded_packages[self.package_name] = {'src_path': self.src_path, 'manifest_path': manifest_path, 'pixi_manifest_path': pixi_manifest_path}
+
+
+
+    def _open_toml_file(
+        self,
+    ):
         with open(os.path.join(self.wf_dir, self.package_name, 'pyproject.toml'), 'rb') as f:
             data = tomllib.load(f)
 
-        src_path_ = data['tool']['hatch']['build']['targets']['wheel']['packages'][0]
+        return data
+
+    def _toml_has_pixi(
+        self,
+        data
+    ):
+        return any(any('pixi' in s for s in x) for x in data.values())
+
+    def _get_paths(
+        self,
+        data
+    ):
+        if self._toml_has_pixi(data):
+            src_path_ = data['tool']['hatch']['build']['targets']['wheel']['packages'][0]
+        else:
+            src_path_ = data['tool']['poetry']['packages'][0]['include']
         src_path = os.path.join(self.wf_dir, self.package_name, src_path_)
         manifest_path = os.path.join(src_path, '__FRACTAL_MANIFEST__.json')
 
-        self.loaded_packages[self.package_name] = {'src_path': src_path, 'manifest_path': manifest_path}
+        return src_path, manifest_path
+
+    def _make_pixi_env(
+        self
+    ):
+        os.makedirs(os.path.join(self.wf_dir, 'pixi_envs'), exist_ok=True)
+        # Launch subprocess to create pixi environment
+        exit_code1 = subprocess.call(['pixi', 'init', self.package_name], cwd=os.path.join(self.wf_dir, 'pixi_envs'))
+        exit_code2 = subprocess.call(['pixi', 'add', self.src_path.split('/')[-1].replace('_', '-')], cwd=os.path.join(self.wf_dir, 'pixi_envs', self.package_name))
+        exit_code2 = subprocess.call(['pixi', 'add', 'cellpose'], cwd=os.path.join(self.wf_dir, 'pixi_envs', self.package_name))
+
+        return os.path.join(self.wf_dir, 'pixi_envs', self.package_name, 'pixi.toml')
