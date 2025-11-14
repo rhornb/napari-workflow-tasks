@@ -1,32 +1,43 @@
-
+import logging
 from typing import TYPE_CHECKING
+
 from qtpy.QtWidgets import (QHBoxLayout, QPushButton, QWidget, QTabWidget,
-                            QTableWidget, QVBoxLayout, QAbstractItemView, QLabel,
-                            QLineEdit, QTabBar, QFileDialog, QCheckBox, QComboBox,
-                            QScrollArea)
+                            QVBoxLayout, QLabel,
+                            QLineEdit, QFileDialog, QCheckBox, QComboBox,
+                            QGroupBox)
 from qtpy.QtGui import QPixmap, QFont
-from qtpy.QtCore import Qt, QSize
+from qtpy.QtCore import Qt
 
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
-# from superqt import QCollapsible
+from PyQt5.QtWidgets import QLineEdit, QCheckBox, QMessageBox
 
 import json
 import subprocess
 import os
+
 import napari
-import dask.array as da
-
-from ome_zarr.reader import Reader
-from ome_zarr.io import parse_url
-from ome_zarr.types import LayerData
-
+from napari.layers import Shapes
 from napari_ome_zarr._reader import napari_get_reader
-from napari.qt.threading import thread_worker
 
+import dask.array as da
+import numpy as np
+
+from ngio import open_ome_zarr_container
+from ngio.tables import RoiTable
+
+from napari_workflow_tasks._utils import create_roi_from_bbox, NapariHandler
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+from .io_utils import PackageImporter
+
+from .pixi_utils import pixi_runner
 
 if TYPE_CHECKING:
     import napari
+
+# from io_utils import PackageImporter
 
 # TODO: Automatically decide what properties to ignore based on MANIFEST
 IGNORE_PROPERTIES = ['zarr_url', 'channels_to_include', 'channels_to_exclude', 'measure_texture'] #, 'channel'
@@ -39,7 +50,11 @@ def wipe_cache():
     cache = resize_dask_cache(nbytes=0)
     cache = resize_dask_cache(nbytes=cache_bytes)
 
-def abspath(root, relpath):
+def abspath(
+    root,
+    relpath
+):
+
     root = Path(root)
     if root.is_dir():
         path = root/relpath
@@ -52,18 +67,32 @@ class FractalTaskManager:
     def __init__(self):
         self.tasks = dict()
 
-    def add_task(self,
-                 name,
-                 parent_dir,
-                 executable_parallel,
-                 properties,
-                 defs,
-                 required,
-                 type,
-                 title):
+    def setup_logging(self):
+        for handler in logger.root.handlers[:]:
+            logging.root.removeHandler(handler)
+        # Create a custom handler for napari
+        napari_handler = NapariHandler()
+        napari_handler.setLevel(logging.INFO)
+
+        logger.addHandler(napari_handler)
+
+    def add_task(
+        self,
+        name,
+        package_name,
+        parent_dir,
+        executable_parallel,
+        properties,
+        defs,
+        required,
+        type,
+        title
+    ):
+
 
         task_dict = dict(
             title=title,
+            package_name=package_name,
             parent_dir=parent_dir,
             executable_parallel=executable_parallel,
             properties=properties,
@@ -74,35 +103,61 @@ class FractalTaskManager:
         )
         self.tasks[name] = task_dict
 
-    def get_executable_path(self,
-                            name):
+    def get_executable_path(
+        self,
+        name
+    ):
         parent_dir = self.tasks[name]['parent_dir']
         exec_fname = self.tasks[name]['executable_parallel']
 
         return os.path.join(parent_dir, exec_fname)
 
-    def get_path_to_json(self,
-                         name):
+    def get_package_name(
+        self,
+        name
+    ):
+
+        return self.tasks[name]['package_name']
+
+    def get_parent_dir(
+        self,
+        name
+    ):
+
+        return self.tasks[name]['parent_dir']
+
+    def get_path_to_json(
+        self,
+        name
+    ):
 
         parent_dir = self.tasks[name]['parent_dir']
         title = self.tasks[name]['title']
         return os.path.join(parent_dir, f'{title}.json')
 
-    def get_task(self,
-                 name):
+    def get_task(
+        self,
+        name
+    ):
         return self.tasks[name]
 
-    def get_properties(self,
-                       name):
+    def get_properties(
+        self,
+        name
+    ):
         return self.tasks[name]['properties']
 
-    def get_defs(self,
-                 name):
+    def get_defs(
+        self,
+        name
+    ):
         return self.tasks[name]['defs']
 
-    def write_to_json(self,
-                      name):
-
+    def write_to_json(
+        self,
+        name
+    ):
+        # Write json to ".napari_workflow_tasks" directory inside "params" directory
         parent_dir = self.tasks[name]['parent_dir']
         title = self.tasks[name]['title']
         path_to_json = os.path.join(parent_dir, f'{title}.json')
@@ -111,18 +166,25 @@ class FractalTaskManager:
         for prop_key in self.tasks[name]['properties'].keys():
             if 'value' in self.tasks[name]['properties'][prop_key]:
                 args_dict[prop_key] = self.tasks[name]['properties'][prop_key]['value']
+                if isinstance(args_dict[prop_key], dict):
+                    args_dict[prop_key] = args_dict[prop_key]['args']
 
         with open(path_to_json, 'w') as f:
             json.dump(args_dict, f)
 
-    def get_title(self,
-                  name):
+    def get_title(
+        self,
+        name
+    ):
+
         return self.tasks[name]['title']
 
-    def update_task_property(self,
-                             name,
-                             property,
-                             value):
+    def update_task_property(
+        self,
+        name,
+        property,
+        value
+    ):
 
         print('Property dict updated', name, property, value)
         try:
@@ -130,18 +192,27 @@ class FractalTaskManager:
         except KeyError:
             print(f'Property {property} not defined in MANIFEST')
 
-    def add_widget_dict(self,
-                        name,
-                        widget_dict):
+    def add_widget_dict(
+        self,
+        name,
+        widget_dict
+    ):
+
         self.tasks[name]['widget_dict'] = widget_dict
 
-    def remove_widget_dict(self,
-                           name):
+    def remove_widget_dict(
+        self,
+        name
+    ):
+
         self.tasks[name]['widge_dict'] = dict()
 
-    def get_widget_value(self,
-                         name,
-                         property):
+    def get_widget_value(
+        self,
+        name,
+        property
+    ):
+
         widget = self.tasks[name]['widget_dict'][property]
 
         if isinstance(widget, QLineEdit):
@@ -167,9 +238,14 @@ class FractalTaskManager:
             else:
                 return False
 
+
+
         elif isinstance(widget, dict):
             args_dict = dict()
             ref = os.path.split(self.tasks[name]['properties'][property]['$ref'])[-1]
+            defs = self.get_defs(name)
+            defs_props = defs[ref]['properties']
+
             for key in widget.keys():
                 if isinstance(widget[key], QLineEdit):
                     value = widget[key].text()
@@ -177,13 +253,17 @@ class FractalTaskManager:
                         args_dict[key] = None
                     else:
                         try:
-                            type = self.tasks[name]['defs'][ref][key]['type']
+                            # type = self.tasks[name]['defs'][ref][key]['type']
+                            type = defs_props[key]['type']
                             print(name, property, key, type)
 
                             if type == 'integer':
                                 args_dict[key] = int(value)
                             elif type == 'float':
                                 args_dict[key] = float(value)
+                            elif type == 'array':
+                                print('Array type detected', [str(x) for x in value.split(',')])
+                                args_dict[key] = [str(x) for x in value.split(',')]
                             else:
                                 args_dict[key] = value
                         except KeyError:
@@ -206,13 +286,23 @@ class TaskWorker(QObject):
     progress = pyqtSignal(int)
 
     @property
+    def manifest_path(self):
+        return self._manifest_path
+
+    @manifest_path.setter
+    def manifest_path(self, path):
+        # Add checks for validity
+        print(f'Set manifest_path as {path}')
+        self._manifest_path = path
+
+    @property
     def task_name(self):
         return self._task_name
 
     @task_name.setter
     def task_name(self, name):
         # Add checks for validity
-        print(f'Set task_name as {name}')
+        logger.info(f'Set task_name as {name}')
         self._task_name = name
 
     @property
@@ -222,44 +312,63 @@ class TaskWorker(QObject):
     @task_manager.setter
     def task_manager(self, task_manager):
         # Add checks for validity
-        print(f'Set task_manager')
+        logger.info(f'Set task_manager')
         self._task_manager = task_manager
 
     @pyqtSlot()
     def run(self):
-        print('Thread running')
+        logger.info('Thread running')
         task_name = self._launch_task_subprocess(self.task_name)
         self.finished.emit(task_name)
 
     def _launch_task_subprocess(self, task_name):
-        print('Launching subprocess...')
+        logger.info('Launching subprocess...')
         path_to_executable = self.task_manager.get_executable_path(task_name)
-        print(path_to_executable)
 
         path_to_task_args = self.task_manager.get_path_to_json(task_name)
 
-        p = subprocess.Popen(['python', os.path.join(os.path.dirname(__file__), 'task_wrapper.py'), '--executable', path_to_executable, '--path_to_task_args', path_to_task_args]) #Pass wrapper_args: path to executable
+        p = subprocess.Popen(['pixi', 'run', '--manifest-path', self.manifest_path, os.path.join(os.path.dirname(__file__), 'task_wrapper.py'), '--executable', path_to_executable, '--path_to_task_args', path_to_task_args]) #Pass wrapper_args: path to executable
         p.wait()
 
-        print('Finished running subprocess')
+        logger.info('Finished running subprocess')
 
         return task_name
+
 
 class TasksQWidget(QWidget):
     def __init__(self, napari_viewer):
         super().__init__()
         self._viewer = napari_viewer
-
         self.exec_btn_dict = dict()
-
-        ### Dictionary of TaskManager
         self.task_manager = FractalTaskManager()
+
+        # ---------------- Main container ----------------
+        ### Add PackageImporter
+        self.package_importer = PackageImporter()
 
         ### Core widget components
         self.main_container = QWidget()
-        self.tab_container = QTabWidget()
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        self.main_container.setLayout(main_layout)
+        self.main_container.setMinimumWidth(400)
+        self.main_container.setFixedHeight(900)
 
-        ### Container to select napari layer
+        # ---------------- Title & Logo ----------------
+        main_title = QLabel("Fractal Task Launcher")
+        main_title.setFont(QFont('Arial', 16, weight=QFont.Bold))
+        icon_img_container = QWidget()
+        icon_img_container.setLayout(QHBoxLayout())
+        im_path = abspath(__file__, 'logo_images/fractal_logo.png')
+        icon_img = QPixmap(im_path).scaled(120, 120, Qt.KeepAspectRatio,
+                                           Qt.SmoothTransformation)
+        icon_label = QLabel()
+        icon_label.setPixmap(icon_img)
+        icon_label.setFixedSize(130, 130)
+        icon_img_container.layout().addWidget(icon_label)
+
+        # ---------------- Image input ----------------
         image_input_container = QWidget()
         image_input_container.setLayout(QHBoxLayout())
         image_input_label = QLabel('Input:')
@@ -269,58 +378,79 @@ class TasksQWidget(QWidget):
         image_input_container.layout().addWidget(self._image_layers)
         image_input_container.layout().setSpacing(0)
 
-        ### Select workflow with tasks
-        self.workflow_adder_container = QWidget()
-        self.workflow_adder_container.setLayout(QVBoxLayout())
+        # ---------------- Crop to ROI section ----------------
+        crop_container = QGroupBox("(Optional) Custom ROI selection")
+        crop_container.setMinimumHeight(150)
+        crop_layout = QVBoxLayout()
+        crop_layout.setSpacing(10)
+        crop_layout.setContentsMargins(15, 15, 15, 15)
+        crop_container.setLayout(crop_layout)
+
+        self.add_shapes_button = QPushButton("Add Shapes Layer for ROI selection")
+        self.add_shapes_button.clicked.connect(self._add_shapes_layer)
+        crop_layout.addWidget(self.add_shapes_button)
+
+        # ROI Table Name: label + input in horizontal layout
+        roi_table_container = QWidget()
+        roi_table_container.setLayout(QHBoxLayout())
+        roi_table_label = QLabel("ROI Table Name:")
+        roi_table_label.setFont(QFont('Arial', 14, weight=QFont.Bold))
+        self.roi_table_input = QLineEdit("Cropped_FOV_ROI_table")
+        roi_table_container.layout().addWidget(roi_table_label)
+        roi_table_container.layout().addWidget(self.roi_table_input)
+        roi_table_container.layout().setSpacing(5)
+        crop_layout.addWidget(roi_table_container)
+
+        self.roi_overwrite_checkbox = QCheckBox("Overwrite")
+        crop_layout.addWidget(self.roi_overwrite_checkbox)
+
+        self.crop_button_init = QPushButton("Save ROIs to table")
+        self.crop_button_init.clicked.connect(self._handle_crop_button_clicked)
+        crop_layout.addWidget(self.crop_button_init)
+
+        # ---------------- Workflow / Add Task Package ----------------
+        workflow_container = QGroupBox("Workflow / Add Task Package")
+        workflow_container.setMinimumHeight(150)
+        workflow_layout = QVBoxLayout()
+        workflow_layout.setSpacing(10)
+        workflow_layout.setContentsMargins(15, 15, 15, 15)
+        workflow_container.setLayout(workflow_layout)
 
         self.workflow_adder_btn = QPushButton("Add task package")
         self.workflow_adder_btn.clicked.connect(self._select_workflow_file)
-        self.workflow_adder_container.layout().addWidget(self.workflow_adder_btn)
+        workflow_layout.addWidget(self.workflow_adder_btn)
 
         select_workflow_container = QWidget()
         select_workflow_container.setLayout(QHBoxLayout())
         workflow_label = QLabel("Select task:")
         workflow_label.setFont(QFont('Arial', 14, weight=QFont.Bold))
         select_workflow_container.layout().addWidget(workflow_label)
-
         self.workflow_combo_box = QComboBox(self)
         select_workflow_container.layout().addWidget(self.workflow_combo_box)
+        workflow_layout.addWidget(select_workflow_container)
 
-        self.workflow_adder_container.layout().addWidget(select_workflow_container)
-
-        ### Container to add more tabs with tasks
-        task_adder_container = QWidget()
-        task_adder_container.setLayout(QHBoxLayout())
+        # ---------------- Task Adder Section ----------------
+        task_adder_container = QGroupBox("Add Task")
+        task_adder_layout = QHBoxLayout()
+        task_adder_layout.setContentsMargins(15, 15, 15, 15)
+        task_adder_container.setLayout(task_adder_layout)
 
         self.task_adder_btn = QPushButton("Add task")
         self.task_adder_btn.clicked.connect(self._add_task)
-        task_adder_container.layout().addWidget(self.task_adder_btn)
+        task_adder_layout.addWidget(self.task_adder_btn)
 
-        ### Beautification...
-        icon_img_container = QWidget()
-        icon_img_container.setLayout(QHBoxLayout())
-        im_path = abspath(__file__, f'logo_images/fractal_logo.png')
-        icon_img = QPixmap(im_path)
-        icon_size_inner = QSize(120, 120)
-        icon_size_outer = QSize(130, 130)
-        icon_img = icon_img.scaled(icon_size_inner, Qt.KeepAspectRatio, transformMode=Qt.SmoothTransformation)
-        icon_label = QLabel()
-        icon_label.setPixmap(icon_img)
-        icon_label.setFixedSize(icon_size_outer.width(), icon_size_outer.height())
-        icon_img_container.layout().addWidget(icon_label)
+        # ---------------- Assemble main container ----------------
+        main_layout.addWidget(main_title)
+        main_layout.addWidget(icon_img_container)
+        main_layout.addWidget(image_input_container)
+        main_layout.addWidget(crop_container)
+        main_layout.addWidget(workflow_container)
+        main_layout.addWidget(task_adder_container)
+        main_layout.addStretch(1)  # pushes everything up nicely
 
-        main_title = QLabel('Fractal Task Launcher')
-        main_title.setFont(QFont('Arial', 16, weight=QFont.Bold))
-        ### Main container
-        self.main_container.setLayout(QVBoxLayout())
-        self.main_container.setFixedHeight(500)
-        self.main_container.layout().addWidget(main_title)
-        self.main_container.layout().addWidget(icon_img_container)
-        self.main_container.layout().addWidget(image_input_container)
-        self.main_container.layout().addWidget(self.workflow_adder_container)
-        self.main_container.layout().addWidget(task_adder_container)
 
-        ### Tasks container
+        # ---------------- Tab container ----------------
+        self.tab_container = QTabWidget()
         self.tab_container.addTab(self.main_container, "Main")
 
         self.setLayout(QHBoxLayout())
@@ -338,15 +468,27 @@ class TasksQWidget(QWidget):
                 self._image_layers.addItem(layer.name)
 
     def _select_workflow_file(self):
-        path_to_workflow = QFileDialog().getOpenFileName(self, "Select workflow file", ".",
-                                                         "workflow specs (*.json)")[0]
+        # Open workflow package with PackageImporter
+
+        path_to_package = QFileDialog().getOpenFileName(self, "Select workflow package", ".",
+                                                         "workflow specs (*.tar.gz)")[0]
+
+        self.package_importer.open_package(path_to_package)
+
+        path_to_workflow = self.package_importer.loaded_packages[self.package_importer.package_name]['manifest_path']
+
+        print(os.path.split(path_to_workflow)[0])
 
         workflow_args = self._get_json_params(path_to_workflow)
 
         for task in workflow_args["task_list"]:
-            if task.get("category") in INCLUDE_CATEGORIES:
+            # if task.get("category") in INCLUDE_CATEGORIES:
+            is_parallel = True if task['type'] == "parallel" else False
+
+            if is_parallel:
                 self.workflow_combo_box.addItem(task["name"])
                 self.task_manager.add_task(name=task["name"],
+                                           package_name=self.package_importer.package_name,
                                            parent_dir=os.path.split(path_to_workflow)[0],
                                            executable_parallel=task["executable_parallel"],
                                            properties=task["args_schema_parallel"]["properties"],
@@ -356,20 +498,18 @@ class TasksQWidget(QWidget):
                                            title=task["args_schema_parallel"]["title"])
 
     def _fetch_subprocess_output(self, task_name):
-        print(f'Received task_name={task_name}')
-        if task_name in ['Thresholding Label Task', 'Cellpose Segmentation']:
+        logger.info(f'Received task_name={task_name}')
+        if task_name in ['Thresholding Label Task', 'Cellpose Segmentation', 'Cellpose SAM Segmentation']:
             wipe_cache()
             # Remove and reload zarr
             props = self.task_manager.get_properties(task_name)
             path_to_zarr = props['zarr_url']['value']
 
             # Maybe we can allow the user to select this from a drop-down menu of all possible fields?
-            if task_name == 'Thresholding Label Task':
+            if task_name in ['Thresholding Label Task', 'Cellpose SAM Segmentation']:
                 out_layer_name = props['label_name']['value']
             elif task_name == 'Cellpose Segmentation':
                 out_layer_name = props['output_label_name']['value']
-
-            print(f'out_layer_name={out_layer_name}')
 
             for layer in self._viewer.layers:
                 if isinstance(layer, napari.layers.Labels):
@@ -379,14 +519,13 @@ class TasksQWidget(QWidget):
             for layer_data in zarr_layer_data:
                 if layer_data[-1] == 'labels':
                     layer = napari.layers.Layer.create(*layer_data)
-                    print(out_layer_name, layer.name)
                     if layer.name == out_layer_name:
                         layer.visible = True
                         self._viewer.add_layer(layer)
 
-        self.thread.quit()
-        self.worker.deleteLater()
-        self.thread.deleteLater()
+        # self.thread.quit()
+        # self.worker.deleteLater()
+        # self.thread.deleteLater()
 
         self._update_execute_buttons(is_enabled=True)
 
@@ -415,16 +554,37 @@ class TasksQWidget(QWidget):
         #   create new thread
         self._update_execute_buttons(is_enabled=False)
 
-        self.thread = QThread(parent=self)
-        self.worker = TaskWorker()
-        self.worker.task_name = task_name
-        self.worker.task_manager = self.task_manager
-        self.worker.moveToThread(self.thread)
 
-        self.thread.started.connect(self.worker.run)
-        self.worker.finished.connect(self._fetch_subprocess_output)
+        package_name = self.task_manager.get_package_name(task_name)
+        manifest_path = self.package_importer.loaded_packages[package_name]['pixi_manifest_path']
+        print('Launching subprocess...')
+        path_to_executable = self.task_manager.get_executable_path(task_name)
+        print(path_to_executable)
 
-        self.thread.start()
+        path_to_task_args = self.task_manager.get_path_to_json(task_name)
+
+        # self.thread.start()
+        # print(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}')
+        # p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}', shell=True) #Pass wrapper_args: path to executable
+        # print(f'pixi run --manifest-path {manifest_path} python {path_to_executable} --args-json {path_to_task_args} --out-json out-json-file.json')
+        # p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}', shell=True) #Pass wrapper_args: path to executable
+        p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {path_to_executable} --args-json {path_to_task_args} --out-json {os.path.join(os.path.split(path_to_task_args)[0], "out_file.json")}', shell=True) #Pass wrapper_args: path to executable
+
+        p.wait()
+
+        print('Finished running subprocess')
+        self._fetch_subprocess_output(task_name)
+        # self.thread = QThread(parent=self)
+        # self.worker = TaskWorker()
+        # self.worker.task_name = task_name
+        # self.worker.manifest_path = self.package_importer.loaded_packages[package_name]['pixi_manifest_path']
+        # self.worker.task_manager = self.task_manager
+        # self.worker.moveToThread(self.thread)
+        #
+        # self.thread.started.connect(self.worker.run)
+        # self.worker.finished.connect(self._fetch_subprocess_output)
+        #
+        # self.thread.start()
         # QLabel describing state of progress
         # self.thread.finished.connect(
         #     lambda: self.stepLabel.setText("Long-Running Step: 0")
@@ -501,6 +661,12 @@ class TasksQWidget(QWidget):
 
                     if 'type' in defs_props[def_prop_key].keys():
                         if defs_props[def_prop_key]['type'] in ["integer", "float", "number", "string"]:
+                            widget_dict_[def_prop_key] = QLineEdit(objectName=object_name_)
+                            if with_default_value:
+                                widget_dict_[def_prop_key].setText(str(default_value))
+
+                        elif defs_props[def_prop_key]['type'] in ['array']:
+                            # Create as many parallel widgets as are needed
                             widget_dict_[def_prop_key] = QLineEdit(objectName=object_name_)
                             if with_default_value:
                                 widget_dict_[def_prop_key].setText(str(default_value))
@@ -586,3 +752,76 @@ class TasksQWidget(QWidget):
     def _get_json_params(self, path_to_json):
         with open(path_to_json) as f:
             return json.load(f)
+
+    def _add_shapes_layer(self):
+        """Add Shapes layer to napari viewer for ROI selection."""
+        shapes_layer = Shapes(name="ROI selection", shape_type='polygon')
+        self._viewer.add_layer(shapes_layer)
+
+    def _handle_crop_button_clicked(self):
+        table_name = self.roi_table_input.text().strip()
+        overwrite = self.roi_overwrite_checkbox.isChecked()
+
+        if table_name == "":
+            QMessageBox.warning(
+                None,
+                "Missing table name",
+                "Please enter an ROI table name before continuing."
+            )
+            return
+
+        # Pass both values to the crop function
+        self._crop_image_to_rois(table_name, overwrite)
+
+
+    def _crop_image_to_rois(self, table_name: str, overwrite: bool):
+        """Crop selected image to ROI defined by Shapes layer."""
+        image_name = self._image_layers.currentText()
+        if not image_name:
+            logger.warning("No image layer selected.")
+            return
+
+        # Get selected image layer from the napari viewer
+        image_layer = self._viewer.layers[image_name]
+
+        # Find all shape layers
+        shapes_layers = [layer for layer in self._viewer.layers
+                         if isinstance(layer, Shapes)]
+
+        if not shapes_layers:
+            logger.warning("Please first select a ROI with a Polygon Shape Layer.")
+            return
+
+        shapes_layer = shapes_layers[0]
+        if not shapes_layer.data:
+            logger.warning("Shapes layer has no data.")
+            return
+
+        # TODO: add support for multiple shape layers
+        if len(shapes_layers) > 1:
+            logger.warning("Multiple Shapes layers detected. Using the most recent one.")
+        shapes_layer = shapes_layers[0]
+
+        # Create ROIs from shape layer polygons
+        cropped_rois = []
+        for roi_id, polygon_array in enumerate(shapes_layer.data):
+            polygon_array = np.array(polygon_array)
+            crop_roi = create_roi_from_bbox(polygon_array, roi_id=roi_id+1)
+            cropped_rois.append(crop_roi)
+
+        # Save to table
+        ome_zarr = open_ome_zarr_container(image_layer.source.path)
+        roi_table_crops = RoiTable(rois=cropped_rois)
+        ome_zarr.add_table(table_name, roi_table_crops, overwrite=overwrite,
+                           backend="experimental_csv_v1")
+
+        # Just for testing
+        imgs = ome_zarr.get_image("0")
+        pixel_sizes = imgs.pixel_size.zyx
+        for roi in roi_table_crops.rois():
+            cropped_img = imgs.get_roi_as_numpy(roi, c=0)
+            # add to viewer
+            self._viewer.add_image(cropped_img, name=f"Cropped_FOV_ROI_{roi.name}",
+                                   scale=pixel_sizes, blending="additive")
+        
+        logger.info(f"Finished cropping {image_name} to ROI(s).")

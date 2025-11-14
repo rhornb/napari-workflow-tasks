@@ -23,22 +23,23 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.8, <3.12"
 dependencies = [
     "numpy",
     "magicgui",
     "qtpy",
     "scikit-image",
+    "ngio",
+    "napari",
 ]
 
 [project.optional-dependencies]
 testing = [
     "tox",
-    "pytest",  # https://docs.pytest.org/en/latest/contents.html
-    "pytest-cov",  # https://pytest-cov.readthedocs.io/en/latest/
-    "pytest-qt",  # https://pytest-qt.readthedocs.io/en/latest/
-    "napari",
-    "pyqt5",
+    "pytest",
+    "pytest-cov",
+    "pytest-qt",
+    "pooch",
 ]
 
 [project.entry-points."napari.manifest"]
@@ -63,7 +64,6 @@ where = ["src"]
 [tool.setuptools.package-data]
 "*" = ["*.yaml"]
 
-
 [tool.setuptools.dynamic]
 version = {attr = "napari_workflow_tasks.__init__.__version__"}
 
@@ -74,24 +74,23 @@ target-version = ['py38', 'py39', 'py310']
 [tool.ruff]
 line-length = 79
 lint.select = [
-    "E", "F", "W", #flake8
-    "UP", # pyupgrade
-    "I", # isort
-    "BLE", # flake8-blind-exception
-    "B", # flake8-bugbear
-    "A", # flake8-builtins
-    "C4", # flake8-comprehensions
-    "ISC", # flake8-implicit-str-concat
-    "G", # flake8-logging-format
-    "PIE", # flake8-pie
-    "SIM", # flake8-simplify
+    "E", "F", "W",
+    "UP",
+    "I",
+    "BLE",
+    "B",
+    "A",
+    "C4",
+    "ISC",
+    "G",
+    "PIE",
+    "SIM",
 ]
 lint.ignore = [
-    "E501", # line too long. let black handle this
-    "UP006", "UP007", # type annotation. As using magicgui require runtime type annotation then we disable this.
-    "SIM117", # flake8-simplify - some of merged with statements are not looking great with black, reanble after drop python 3.9
+    "E501",
+    "UP006", "UP007",
+    "SIM117",
 ]
-
 exclude = [
     ".bzr",
     ".direnv",
@@ -113,6 +112,26 @@ exclude = [
     "*vendored*",
     "*_vendor*",
 ]
-
 target-version = "py38"
 fix = true
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "win-64", "linux-64"]
+
+[tool.pixi.pypi-dependencies]
+napari-workflow-tasks = { path = ".", editable = true }
+numpy = "*"
+magicgui = "*"
+qtpy = "*"
+scikit-image = "*"
+ngio = "*"
+napari = "*"
+napari-ome-zarr = "*"
+
+[tool.pixi.dependencies]
+pyqt = ">=5.15,<6"
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+testing = { features = ["testing"], solve-group = "default" }
