@@ -816,6 +816,6 @@ class TasksQWidget(QWidget):
         # Save to table
         ome_zarr = open_ome_zarr_container(image_layer.source.path)
         roi_table_crops = RoiTable(rois=cropped_rois)
-        ome_zarr.add_table(table_name, roi_table_crops, overwrite=overwrite)
+        ome_zarr.add_table(table_name, roi_table_crops, overwrite=overwrite, backend="experimental_csv_v1")
 
         logger.info(f"Finished cropping {image_name} to ROI(s).")
