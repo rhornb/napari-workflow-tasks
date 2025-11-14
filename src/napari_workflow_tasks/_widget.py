@@ -715,7 +715,12 @@ class TasksQWidget(QWidget):
                     container.layout().addWidget(widget_dict[prop_key][prop_key_])
                     outer_container.layout().addWidget(container)
 
-                task_container.addTab(outer_container, task_properties[prop_key]['title'])
+                # Wrap object-tab content in a scroll area
+                object_scroll = QScrollArea()
+                object_scroll.setWidgetResizable(True)
+                object_scroll.setWidget(outer_container)
+
+                task_container.addTab(object_scroll, task_properties[prop_key]['title'])
 
             else:
                 container = QWidget()
@@ -745,7 +750,8 @@ class TasksQWidget(QWidget):
         task_main_scroll.setWidgetResizable(True)
         task_main_scroll.setWidget(main_container)
 
-        task_container.addTab(main_container, "Main")
+        # Add the scroll area as the Main tab content
+        task_container.addTab(task_main_scroll, "Main")
         self.tab_container.addTab(task_container, task_name)
 
     def _close_tab(self, task_name):
