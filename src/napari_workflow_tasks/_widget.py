@@ -66,7 +66,7 @@ class FractalTaskManager:
     # Manage tasks by keeping track of what each tab contains and what executable it links to
     def __init__(self):
         self.tasks = dict()
-        
+
     def setup_logging(self):
         for handler in logger.root.handlers[:]:
             logging.root.removeHandler(handler)
@@ -255,6 +255,9 @@ class FractalTaskManager:
                                 args_dict[key] = int(value)
                             elif type == 'float':
                                 args_dict[key] = float(value)
+                            elif type == 'array':
+                                print('Array type detected', [int(x) for x in value.split(',')])
+                                args_dict[key] = [int(x) for x in value.split(',')]
                             else:
                                 args_dict[key] = value
                         except KeyError:
@@ -352,7 +355,7 @@ class TasksQWidget(QWidget):
         icon_img_container = QWidget()
         icon_img_container.setLayout(QHBoxLayout())
         im_path = abspath(__file__, 'logo_images/fractal_logo.png')
-        icon_img = QPixmap(im_path).scaled(120, 120, Qt.KeepAspectRatio, 
+        icon_img = QPixmap(im_path).scaled(120, 120, Qt.KeepAspectRatio,
                                            Qt.SmoothTransformation)
         icon_label = QLabel()
         icon_label.setPixmap(icon_img)
@@ -514,9 +517,9 @@ class TasksQWidget(QWidget):
                         layer.visible = True
                         self._viewer.add_layer(layer)
 
-        self.thread.quit()
-        self.worker.deleteLater()
-        self.thread.deleteLater()
+        # self.thread.quit()
+        # self.worker.deleteLater()
+        # self.thread.deleteLater()
 
         self._update_execute_buttons(is_enabled=True)
 
@@ -554,10 +557,10 @@ class TasksQWidget(QWidget):
 
         path_to_task_args = self.task_manager.get_path_to_json(task_name)
 
-        self.thread.start()
-        print(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}')
-        p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}', shell=True) #Pass wrapper_args: path to executable
-        print(f'pixi run --manifest-path {manifest_path} python {path_to_executable} --args-json {path_to_task_args} --out-json out-json-file.json')
+        # self.thread.start()
+        # print(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}')
+        # p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}', shell=True) #Pass wrapper_args: path to executable
+        # print(f'pixi run --manifest-path {manifest_path} python {path_to_executable} --args-json {path_to_task_args} --out-json out-json-file.json')
         # p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}', shell=True) #Pass wrapper_args: path to executable
         p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {path_to_executable} --args-json {path_to_task_args} --out-json {os.path.join(os.path.split(path_to_task_args)[0], "out_file.json")}', shell=True) #Pass wrapper_args: path to executable
 
@@ -581,7 +584,7 @@ class TasksQWidget(QWidget):
         #     lambda: self.stepLabel.setText("Long-Running Step: 0")
         # )
         #
-        
+
     def _task_tab_exists(self, task_name):
         for child_widget in self.tab_container.findChildren(QWidget):
             if isinstance(child_widget, QWidget):
@@ -652,6 +655,12 @@ class TasksQWidget(QWidget):
 
                     if 'type' in defs_props[def_prop_key].keys():
                         if defs_props[def_prop_key]['type'] in ["integer", "float", "number", "string"]:
+                            widget_dict_[def_prop_key] = QLineEdit(objectName=object_name_)
+                            if with_default_value:
+                                widget_dict_[def_prop_key].setText(str(default_value))
+
+                        elif defs_props[def_prop_key]['type'] in ['array']:
+                            # Create as many parallel widgets as are needed
                             widget_dict_[def_prop_key] = QLineEdit(objectName=object_name_)
                             if with_default_value:
                                 widget_dict_[def_prop_key].setText(str(default_value))
@@ -737,12 +746,12 @@ class TasksQWidget(QWidget):
     def _get_json_params(self, path_to_json):
         with open(path_to_json) as f:
             return json.load(f)
-        
+
     def _add_shapes_layer(self):
         """Add Shapes layer to napari viewer for ROI selection."""
         shapes_layer = Shapes(name="ROI selection", shape_type='polygon')
         self._viewer.add_layer(shapes_layer)
-        
+
     def _handle_crop_button_clicked(self):
         table_name = self.roi_table_input.text().strip()
         overwrite = self.roi_overwrite_checkbox.isChecked()
@@ -758,7 +767,7 @@ class TasksQWidget(QWidget):
         # Pass both values to the crop function
         self._crop_image_to_rois(table_name, overwrite)
 
-        
+
     def _crop_image_to_rois(self, table_name: str, overwrite: bool):
         """Crop selected image to ROI defined by Shapes layer."""
         image_name = self._image_layers.currentText()
@@ -770,14 +779,14 @@ class TasksQWidget(QWidget):
         image_layer = self._viewer.layers[image_name]
 
         # Find all shape layers
-        shapes_layers = [layer for layer in self._viewer.layers 
+        shapes_layers = [layer for layer in self._viewer.layers
                          if isinstance(layer, Shapes)]
-        
+
         if not shapes_layers:
             logger.warning("Please first select a ROI with a Polygon Shape Layer.")
             return
-        
-        shapes_layer = shapes_layers[0] 
+
+        shapes_layer = shapes_layers[0]
         if not shapes_layer.data:
             logger.warning("Shapes layer has no data.")
             return
@@ -794,7 +803,7 @@ class TasksQWidget(QWidget):
             for point in polygon_array:
                 polygon_array_world.append(image_layer.data_to_world(point))
             polygon_array_world = np.array(polygon_array_world)
-        
+
             crop_roi = create_roi_from_bbox(polygon_array_world, roi_id=roi_id+1)
             cropped_rois.append(crop_roi)
 
@@ -802,5 +811,5 @@ class TasksQWidget(QWidget):
         ome_zarr = open_ome_zarr_container(image_layer.source.path)
         roi_table_crops = RoiTable(rois=cropped_rois)
         ome_zarr.add_table(table_name, roi_table_crops, overwrite=overwrite)
-        
+
         logger.info(f"Finished cropping {image_name} to ROI(s).")
