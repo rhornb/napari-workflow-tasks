@@ -2,11 +2,11 @@ import logging
 from typing import TYPE_CHECKING
 
 from qtpy.QtWidgets import (QHBoxLayout, QPushButton, QWidget, QTabWidget,
-                            QTableWidget, QVBoxLayout, QAbstractItemView, QLabel,
-                            QLineEdit, QTabBar, QFileDialog, QCheckBox, QComboBox,
-                            QScrollArea, QGroupBox)
+                            QVBoxLayout, QLabel,
+                            QLineEdit, QFileDialog, QCheckBox, QComboBox,
+                            QGroupBox)
 from qtpy.QtGui import QPixmap, QFont
-from qtpy.QtCore import Qt, QSize
+from qtpy.QtCore import Qt
 
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 from PyQt5.QtWidgets import QLineEdit, QCheckBox, QMessageBox
@@ -18,17 +18,12 @@ import os
 import napari
 from napari.layers import Shapes
 from napari_ome_zarr._reader import napari_get_reader
-from napari.qt.threading import thread_worker
 
 import dask.array as da
 import numpy as np
 
 from ngio import open_ome_zarr_container
 from ngio.tables import RoiTable
-
-from ome_zarr.reader import Reader
-from ome_zarr.io import parse_url
-from ome_zarr.types import LayerData
 
 from napari_workflow_tasks._utils import create_roi_from_bbox, NapariHandler
 from pathlib import Path
@@ -477,11 +472,6 @@ class TasksQWidget(QWidget):
         self.worker.finished.connect(self._fetch_subprocess_output)
 
         self.thread.start()
-        # QLabel describing state of progress
-        # self.thread.finished.connect(
-        #     lambda: self.stepLabel.setText("Long-Running Step: 0")
-        # )
-        #
 
     def _task_tab_exists(self, task_name):
         for child_widget in self.tab_container.findChildren(QWidget):
