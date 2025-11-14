@@ -4,6 +4,7 @@ from ._reader import napari_get_reader
 from ._sample_data import make_sample_data
 from ._widget import TasksQWidget
 from ._writer import write_multiple, write_single_image
+from ._utils import create_roi_from_bbox, NapariHandler
 
 __all__ = (
     "napari_get_reader",
@@ -11,4 +12,6 @@ __all__ = (
     "write_multiple",
     "make_sample_data",
     "TasksQWidget",
+    "create_roi_from_bbox",
+    "NapariHandler",
 )

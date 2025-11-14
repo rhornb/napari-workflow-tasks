@@ -1,29 +1,40 @@
-
+import logging
 from typing import TYPE_CHECKING
+
 from qtpy.QtWidgets import (QHBoxLayout, QPushButton, QWidget, QTabWidget,
                             QTableWidget, QVBoxLayout, QAbstractItemView, QLabel,
                             QLineEdit, QTabBar, QFileDialog, QCheckBox, QComboBox,
-                            QScrollArea)
+                            QScrollArea, QGroupBox)
 from qtpy.QtGui import QPixmap, QFont
 from qtpy.QtCore import Qt, QSize
 
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
-# from superqt import QCollapsible
+from PyQt5.QtWidgets import QLineEdit, QCheckBox, QMessageBox
 
 import json
 import subprocess
 import os
+
 import napari
+from napari.layers import Shapes
+from napari_ome_zarr._reader import napari_get_reader
+from napari.qt.threading import thread_worker
+
 import dask.array as da
+import numpy as np
+
+from ngio import open_ome_zarr_container
+from ngio.tables import RoiTable
 
 from ome_zarr.reader import Reader
 from ome_zarr.io import parse_url
 from ome_zarr.types import LayerData
 
-from napari_ome_zarr._reader import napari_get_reader
-from napari.qt.threading import thread_worker
-
+from napari_workflow_tasks._utils import create_roi_from_bbox, NapariHandler
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 if TYPE_CHECKING:
     import napari
@@ -51,6 +62,15 @@ class FractalTaskManager:
     # Manage tasks by keeping track of what each tab contains and what executable it links to
     def __init__(self):
         self.tasks = dict()
+        
+    def setup_logging(self):
+        for handler in logger.root.handlers[:]:
+            logging.root.removeHandler(handler)
+        # Create a custom handler for napari
+        napari_handler = NapariHandler()
+        napari_handler.setLevel(logging.INFO)
+
+        logger.addHandler(napari_handler)
 
     def add_task(self,
                  name,
@@ -212,7 +232,7 @@ class TaskWorker(QObject):
     @task_name.setter
     def task_name(self, name):
         # Add checks for validity
-        print(f'Set task_name as {name}')
+        logger.info(f'Set task_name as {name}')
         self._task_name = name
 
     @property
@@ -222,26 +242,25 @@ class TaskWorker(QObject):
     @task_manager.setter
     def task_manager(self, task_manager):
         # Add checks for validity
-        print(f'Set task_manager')
+        logger.info(f'Set task_manager')
         self._task_manager = task_manager
 
     @pyqtSlot()
     def run(self):
-        print('Thread running')
+        logger.info('Thread running')
         task_name = self._launch_task_subprocess(self.task_name)
         self.finished.emit(task_name)
 
     def _launch_task_subprocess(self, task_name):
-        print('Launching subprocess...')
+        logger.info('Launching subprocess...')
         path_to_executable = self.task_manager.get_executable_path(task_name)
-        print(path_to_executable)
 
         path_to_task_args = self.task_manager.get_path_to_json(task_name)
 
         p = subprocess.Popen(['python', os.path.join(os.path.dirname(__file__), 'task_wrapper.py'), '--executable', path_to_executable, '--path_to_task_args', path_to_task_args]) #Pass wrapper_args: path to executable
         p.wait()
 
-        print('Finished running subprocess')
+        logger.info('Finished running subprocess')
 
         return task_name
 
@@ -249,17 +268,32 @@ class TasksQWidget(QWidget):
     def __init__(self, napari_viewer):
         super().__init__()
         self._viewer = napari_viewer
-
         self.exec_btn_dict = dict()
-
-        ### Dictionary of TaskManager
         self.task_manager = FractalTaskManager()
 
-        ### Core widget components
+        # ---------------- Main container ----------------
         self.main_container = QWidget()
-        self.tab_container = QTabWidget()
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        self.main_container.setLayout(main_layout)
+        self.main_container.setMinimumWidth(400)
+        self.main_container.setFixedHeight(900)
 
-        ### Container to select napari layer
+        # ---------------- Title & Logo ----------------
+        main_title = QLabel("Fractal Task Launcher")
+        main_title.setFont(QFont('Arial', 16, weight=QFont.Bold))
+        icon_img_container = QWidget()
+        icon_img_container.setLayout(QHBoxLayout())
+        im_path = abspath(__file__, 'logo_images/fractal_logo.png')
+        icon_img = QPixmap(im_path).scaled(120, 120, Qt.KeepAspectRatio, 
+                                           Qt.SmoothTransformation)
+        icon_label = QLabel()
+        icon_label.setPixmap(icon_img)
+        icon_label.setFixedSize(130, 130)
+        icon_img_container.layout().addWidget(icon_label)
+
+        # ---------------- Image input ----------------
         image_input_container = QWidget()
         image_input_container.setLayout(QHBoxLayout())
         image_input_label = QLabel('Input:')
@@ -269,58 +303,79 @@ class TasksQWidget(QWidget):
         image_input_container.layout().addWidget(self._image_layers)
         image_input_container.layout().setSpacing(0)
 
-        ### Select workflow with tasks
-        self.workflow_adder_container = QWidget()
-        self.workflow_adder_container.setLayout(QVBoxLayout())
+        # ---------------- Crop to ROI section ----------------
+        crop_container = QGroupBox("(Optional) Custom ROI selection")
+        crop_container.setMinimumHeight(150)
+        crop_layout = QVBoxLayout()
+        crop_layout.setSpacing(10)
+        crop_layout.setContentsMargins(15, 15, 15, 15)
+        crop_container.setLayout(crop_layout)
+
+        self.add_shapes_button = QPushButton("Add Shapes Layer for ROI selection")
+        self.add_shapes_button.clicked.connect(self._add_shapes_layer)
+        crop_layout.addWidget(self.add_shapes_button)
+
+        # ROI Table Name: label + input in horizontal layout
+        roi_table_container = QWidget()
+        roi_table_container.setLayout(QHBoxLayout())
+        roi_table_label = QLabel("ROI Table Name:")
+        roi_table_label.setFont(QFont('Arial', 14, weight=QFont.Bold))
+        self.roi_table_input = QLineEdit("Cropped_FOV_ROI_table")
+        roi_table_container.layout().addWidget(roi_table_label)
+        roi_table_container.layout().addWidget(self.roi_table_input)
+        roi_table_container.layout().setSpacing(5)
+        crop_layout.addWidget(roi_table_container)
+
+        self.roi_overwrite_checkbox = QCheckBox("Overwrite")
+        crop_layout.addWidget(self.roi_overwrite_checkbox)
+
+        self.crop_button_init = QPushButton("Save ROIs to table")
+        self.crop_button_init.clicked.connect(self._handle_crop_button_clicked)
+        crop_layout.addWidget(self.crop_button_init)
+
+        # ---------------- Workflow / Add Task Package ----------------
+        workflow_container = QGroupBox("Workflow / Add Task Package")
+        workflow_container.setMinimumHeight(150)
+        workflow_layout = QVBoxLayout()
+        workflow_layout.setSpacing(10)
+        workflow_layout.setContentsMargins(15, 15, 15, 15)
+        workflow_container.setLayout(workflow_layout)
 
         self.workflow_adder_btn = QPushButton("Add task package")
         self.workflow_adder_btn.clicked.connect(self._select_workflow_file)
-        self.workflow_adder_container.layout().addWidget(self.workflow_adder_btn)
+        workflow_layout.addWidget(self.workflow_adder_btn)
 
         select_workflow_container = QWidget()
         select_workflow_container.setLayout(QHBoxLayout())
         workflow_label = QLabel("Select task:")
         workflow_label.setFont(QFont('Arial', 14, weight=QFont.Bold))
         select_workflow_container.layout().addWidget(workflow_label)
-
         self.workflow_combo_box = QComboBox(self)
         select_workflow_container.layout().addWidget(self.workflow_combo_box)
+        workflow_layout.addWidget(select_workflow_container)
 
-        self.workflow_adder_container.layout().addWidget(select_workflow_container)
-
-        ### Container to add more tabs with tasks
-        task_adder_container = QWidget()
-        task_adder_container.setLayout(QHBoxLayout())
+        # ---------------- Task Adder Section ----------------
+        task_adder_container = QGroupBox("Add Task")
+        task_adder_layout = QHBoxLayout()
+        task_adder_layout.setContentsMargins(15, 15, 15, 15)
+        task_adder_container.setLayout(task_adder_layout)
 
         self.task_adder_btn = QPushButton("Add task")
         self.task_adder_btn.clicked.connect(self._add_task)
-        task_adder_container.layout().addWidget(self.task_adder_btn)
+        task_adder_layout.addWidget(self.task_adder_btn)
 
-        ### Beautification...
-        icon_img_container = QWidget()
-        icon_img_container.setLayout(QHBoxLayout())
-        im_path = abspath(__file__, f'logo_images/fractal_logo.png')
-        icon_img = QPixmap(im_path)
-        icon_size_inner = QSize(120, 120)
-        icon_size_outer = QSize(130, 130)
-        icon_img = icon_img.scaled(icon_size_inner, Qt.KeepAspectRatio, transformMode=Qt.SmoothTransformation)
-        icon_label = QLabel()
-        icon_label.setPixmap(icon_img)
-        icon_label.setFixedSize(icon_size_outer.width(), icon_size_outer.height())
-        icon_img_container.layout().addWidget(icon_label)
+        # ---------------- Assemble main container ----------------
+        main_layout.addWidget(main_title)
+        main_layout.addWidget(icon_img_container)
+        main_layout.addWidget(image_input_container)
+        main_layout.addWidget(crop_container)
+        main_layout.addWidget(workflow_container)
+        main_layout.addWidget(task_adder_container)
+        main_layout.addStretch(1)  # pushes everything up nicely
 
-        main_title = QLabel('Fractal Task Launcher')
-        main_title.setFont(QFont('Arial', 16, weight=QFont.Bold))
-        ### Main container
-        self.main_container.setLayout(QVBoxLayout())
-        self.main_container.setFixedHeight(500)
-        self.main_container.layout().addWidget(main_title)
-        self.main_container.layout().addWidget(icon_img_container)
-        self.main_container.layout().addWidget(image_input_container)
-        self.main_container.layout().addWidget(self.workflow_adder_container)
-        self.main_container.layout().addWidget(task_adder_container)
 
-        ### Tasks container
+        # ---------------- Tab container ----------------
+        self.tab_container = QTabWidget()
         self.tab_container.addTab(self.main_container, "Main")
 
         self.setLayout(QHBoxLayout())
@@ -356,7 +411,7 @@ class TasksQWidget(QWidget):
                                            title=task["args_schema_parallel"]["title"])
 
     def _fetch_subprocess_output(self, task_name):
-        print(f'Received task_name={task_name}')
+        logger.info(f'Received task_name={task_name}')
         if task_name in ['Thresholding Label Task', 'Cellpose Segmentation']:
             wipe_cache()
             # Remove and reload zarr
@@ -369,8 +424,6 @@ class TasksQWidget(QWidget):
             elif task_name == 'Cellpose Segmentation':
                 out_layer_name = props['output_label_name']['value']
 
-            print(f'out_layer_name={out_layer_name}')
-
             for layer in self._viewer.layers:
                 if isinstance(layer, napari.layers.Labels):
                     self._viewer.layers.remove(layer.name)
@@ -379,7 +432,6 @@ class TasksQWidget(QWidget):
             for layer_data in zarr_layer_data:
                 if layer_data[-1] == 'labels':
                     layer = napari.layers.Layer.create(*layer_data)
-                    print(out_layer_name, layer.name)
                     if layer.name == out_layer_name:
                         layer.visible = True
                         self._viewer.add_layer(layer)
@@ -586,3 +638,70 @@ class TasksQWidget(QWidget):
     def _get_json_params(self, path_to_json):
         with open(path_to_json) as f:
             return json.load(f)
+        
+    def _add_shapes_layer(self):
+        """Add Shapes layer to napari viewer for ROI selection."""
+        shapes_layer = Shapes(name="ROI selection", shape_type='polygon')
+        self._viewer.add_layer(shapes_layer)
+        
+    def _handle_crop_button_clicked(self):
+        table_name = self.roi_table_input.text().strip()
+        overwrite = self.roi_overwrite_checkbox.isChecked()
+
+        if table_name == "":
+            QMessageBox.warning(
+                None,
+                "Missing table name",
+                "Please enter an ROI table name before continuing."
+            )
+            return
+
+        # Pass both values to the crop function
+        self._crop_image_to_rois(table_name, overwrite)
+
+        
+    def _crop_image_to_rois(self, table_name: str, overwrite: bool):
+        """Crop selected image to ROI defined by Shapes layer."""
+        image_name = self._image_layers.currentText()
+        if not image_name:
+            logger.warning("No image layer selected.")
+            return
+
+        # Get selected image layer from the napari viewer
+        image_layer = self._viewer.layers[image_name]
+
+        # Find all shape layers
+        shapes_layers = [layer for layer in self._viewer.layers 
+                         if isinstance(layer, Shapes)]
+        
+        if not shapes_layers:
+            logger.warning("Please first select a ROI with a Polygon Shape Layer.")
+            return
+        
+        shapes_layer = shapes_layers[0] 
+        if not shapes_layer.data:
+            logger.warning("Shapes layer has no data.")
+            return
+
+        # TODO: add support for multiple shape layers
+        if len(shapes_layers) > 1:
+            logger.warning("Multiple Shapes layers detected. Using the most recent one.")
+        shapes_layer = shapes_layers[0]
+
+        # Create ROIs from shape layer polygons
+        cropped_rois = []
+        for roi_id, polygon_array in enumerate(shapes_layer.data):
+            polygon_array_world = []
+            for point in polygon_array:
+                polygon_array_world.append(image_layer.data_to_world(point))
+            polygon_array_world = np.array(polygon_array_world)
+        
+            crop_roi = create_roi_from_bbox(polygon_array_world, roi_id=roi_id+1)
+            cropped_rois.append(crop_roi)
+
+        # Save to table
+        ome_zarr = open_ome_zarr_container(image_layer.source.path)
+        roi_table_crops = RoiTable(rois=cropped_rois)
+        ome_zarr.add_table(table_name, roi_table_crops, overwrite=overwrite)
+        
+        logger.info(f"Finished cropping {image_name} to ROI(s).")
