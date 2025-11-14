@@ -238,9 +238,14 @@ class FractalTaskManager:
             else:
                 return False
 
+
+
         elif isinstance(widget, dict):
             args_dict = dict()
             ref = os.path.split(self.tasks[name]['properties'][property]['$ref'])[-1]
+            defs = self.get_defs(name)
+            defs_props = defs[ref]['properties']
+
             for key in widget.keys():
                 if isinstance(widget[key], QLineEdit):
                     value = widget[key].text()
@@ -248,7 +253,8 @@ class FractalTaskManager:
                         args_dict[key] = None
                     else:
                         try:
-                            type = self.tasks[name]['defs'][ref][key]['type']
+                            # type = self.tasks[name]['defs'][ref][key]['type']
+                            type = defs_props[key]['type']
                             print(name, property, key, type)
 
                             if type == 'integer':
@@ -256,8 +262,8 @@ class FractalTaskManager:
                             elif type == 'float':
                                 args_dict[key] = float(value)
                             elif type == 'array':
-                                print('Array type detected', [int(x) for x in value.split(',')])
-                                args_dict[key] = [int(x) for x in value.split(',')]
+                                print('Array type detected', [str(x) for x in value.split(',')])
+                                args_dict[key] = [str(x) for x in value.split(',')]
                             else:
                                 args_dict[key] = value
                         except KeyError:
@@ -493,14 +499,14 @@ class TasksQWidget(QWidget):
 
     def _fetch_subprocess_output(self, task_name):
         logger.info(f'Received task_name={task_name}')
-        if task_name in ['Thresholding Label Task', 'Cellpose Segmentation']:
+        if task_name in ['Thresholding Label Task', 'Cellpose Segmentation', 'Cellpose SAM Segmentation']:
             wipe_cache()
             # Remove and reload zarr
             props = self.task_manager.get_properties(task_name)
             path_to_zarr = props['zarr_url']['value']
 
             # Maybe we can allow the user to select this from a drop-down menu of all possible fields?
-            if task_name == 'Thresholding Label Task':
+            if task_name in ['Thresholding Label Task', 'Cellpose SAM Segmentation']:
                 out_layer_name = props['label_name']['value']
             elif task_name == 'Cellpose Segmentation':
                 out_layer_name = props['output_label_name']['value']

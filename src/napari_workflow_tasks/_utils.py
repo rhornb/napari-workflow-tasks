@@ -23,21 +23,20 @@ def create_roi_from_bbox(data: np.ndarray, roi_id: Optional[int]= None):
     """
     top_left = np.min(data, axis=(0))
     bottom_right = np.max(data, axis=(0))
-    
+
     x, y = top_left[0], top_left[1]
     x_length = bottom_right[1] - top_left[1]
     y_length = bottom_right[0] - top_left[0]
-    
+
     if roi_id is not None:
         name = f"FOV_{roi_id}"
     else:
         name = "FOV_1"
-    
-    roi_crop = Roi(x=y, y=x, x_length=x_length, y_length=y_length, name=name)
+
+    roi_crop = Roi(z=1, x=y, y=x, x_length=x_length, y_length=y_length, z_length=1, name=name)
     return roi_crop
 
 class NapariHandler(logging.Handler):
     def emit(self, record):
         log_entry = self.format(record)
         show_info(log_entry)
-
