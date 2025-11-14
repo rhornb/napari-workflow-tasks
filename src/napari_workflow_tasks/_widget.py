@@ -805,17 +805,23 @@ class TasksQWidget(QWidget):
         # Create ROIs from shape layer polygons
         cropped_rois = []
         for roi_id, polygon_array in enumerate(shapes_layer.data):
-            polygon_array_world = []
-            for point in polygon_array:
-                polygon_array_world.append(image_layer.data_to_world(point))
-            polygon_array_world = np.array(polygon_array_world)
-
-            crop_roi = create_roi_from_bbox(polygon_array_world, roi_id=roi_id+1)
+            polygon_array = np.array(polygon_array)
+            crop_roi = create_roi_from_bbox(polygon_array, roi_id=roi_id+1)
             cropped_rois.append(crop_roi)
 
         # Save to table
         ome_zarr = open_ome_zarr_container(image_layer.source.path)
         roi_table_crops = RoiTable(rois=cropped_rois)
-        ome_zarr.add_table(table_name, roi_table_crops, overwrite=overwrite, backend="experimental_csv_v1")
+        ome_zarr.add_table(table_name, roi_table_crops, overwrite=overwrite,
+                           backend="experimental_csv_v1")
 
+        # Just for testing
+        imgs = ome_zarr.get_image("0")
+        pixel_sizes = imgs.pixel_size.zyx
+        for roi in roi_table_crops.rois():
+            cropped_img = imgs.get_roi_as_numpy(roi, c=0)
+            # add to viewer
+            self._viewer.add_image(cropped_img, name=f"Cropped_FOV_ROI_{roi.name}",
+                                   scale=pixel_sizes, blending="additive")
+        
         logger.info(f"Finished cropping {image_name} to ROI(s).")
