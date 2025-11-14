@@ -796,15 +796,16 @@ class TasksQWidget(QWidget):
         # Save to table
         ome_zarr = open_ome_zarr_container(image_layer.source.path)
         roi_table_crops = RoiTable(rois=cropped_rois)
-        ome_zarr.add_table(table_name, roi_table_crops, overwrite=overwrite)
+        ome_zarr.add_table(table_name, roi_table_crops, overwrite=overwrite,
+                           backend="experimental_csv_v1")
 
         # Just for testing
-        # imgs = ome_zarr.get_image("0")
-        # pixel_sizes = imgs.pixel_size.zyx
-        # for roi in roi_table_crops.rois():
-        #     cropped_img = imgs.get_roi_as_numpy(roi, c=0)
-        #     # add to viewer
-        #     self._viewer.add_image(cropped_img, name=f"Cropped_FOV_ROI_{roi.name}",
-        #                            scale=pixel_sizes, blending="additive")
+        imgs = ome_zarr.get_image("0")
+        pixel_sizes = imgs.pixel_size.zyx
+        for roi in roi_table_crops.rois():
+            cropped_img = imgs.get_roi_as_numpy(roi, c=0)
+            # add to viewer
+            self._viewer.add_image(cropped_img, name=f"Cropped_FOV_ROI_{roi.name}",
+                                   scale=pixel_sizes, blending="additive")
         
         logger.info(f"Finished cropping {image_name} to ROI(s).")
