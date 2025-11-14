@@ -30,9 +30,14 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+from .io_utils import PackageImporter
+
+from .pixi_utils import pixi_runner
 
 if TYPE_CHECKING:
     import napari
+
+# from io_utils import PackageImporter
 
 # TODO: Automatically decide what properties to ignore based on MANIFEST
 IGNORE_PROPERTIES = ['zarr_url', 'channels_to_include', 'channels_to_exclude', 'measure_texture'] #, 'channel'
@@ -45,7 +50,11 @@ def wipe_cache():
     cache = resize_dask_cache(nbytes=0)
     cache = resize_dask_cache(nbytes=cache_bytes)
 
-def abspath(root, relpath):
+def abspath(
+    root,
+    relpath
+):
+
     root = Path(root)
     if root.is_dir():
         path = root/relpath
@@ -67,18 +76,23 @@ class FractalTaskManager:
 
         logger.addHandler(napari_handler)
 
-    def add_task(self,
-                 name,
-                 parent_dir,
-                 executable_parallel,
-                 properties,
-                 defs,
-                 required,
-                 type,
-                 title):
+    def add_task(
+        self,
+        name,
+        package_name,
+        parent_dir,
+        executable_parallel,
+        properties,
+        defs,
+        required,
+        type,
+        title
+    ):
+
 
         task_dict = dict(
             title=title,
+            package_name=package_name,
             parent_dir=parent_dir,
             executable_parallel=executable_parallel,
             properties=properties,
@@ -89,35 +103,61 @@ class FractalTaskManager:
         )
         self.tasks[name] = task_dict
 
-    def get_executable_path(self,
-                            name):
+    def get_executable_path(
+        self,
+        name
+    ):
         parent_dir = self.tasks[name]['parent_dir']
         exec_fname = self.tasks[name]['executable_parallel']
 
         return os.path.join(parent_dir, exec_fname)
 
-    def get_path_to_json(self,
-                         name):
+    def get_package_name(
+        self,
+        name
+    ):
+
+        return self.tasks[name]['package_name']
+
+    def get_parent_dir(
+        self,
+        name
+    ):
+
+        return self.tasks[name]['parent_dir']
+
+    def get_path_to_json(
+        self,
+        name
+    ):
 
         parent_dir = self.tasks[name]['parent_dir']
         title = self.tasks[name]['title']
         return os.path.join(parent_dir, f'{title}.json')
 
-    def get_task(self,
-                 name):
+    def get_task(
+        self,
+        name
+    ):
         return self.tasks[name]
 
-    def get_properties(self,
-                       name):
+    def get_properties(
+        self,
+        name
+    ):
         return self.tasks[name]['properties']
 
-    def get_defs(self,
-                 name):
+    def get_defs(
+        self,
+        name
+    ):
         return self.tasks[name]['defs']
 
-    def write_to_json(self,
-                      name):
-
+    def write_to_json(
+        self,
+        name
+    ):
+        # Write json to ".napari_workflow_tasks" directory inside "params" directory
         parent_dir = self.tasks[name]['parent_dir']
         title = self.tasks[name]['title']
         path_to_json = os.path.join(parent_dir, f'{title}.json')
@@ -130,14 +170,19 @@ class FractalTaskManager:
         with open(path_to_json, 'w') as f:
             json.dump(args_dict, f)
 
-    def get_title(self,
-                  name):
+    def get_title(
+        self,
+        name
+    ):
+
         return self.tasks[name]['title']
 
-    def update_task_property(self,
-                             name,
-                             property,
-                             value):
+    def update_task_property(
+        self,
+        name,
+        property,
+        value
+    ):
 
         print('Property dict updated', name, property, value)
         try:
@@ -145,18 +190,27 @@ class FractalTaskManager:
         except KeyError:
             print(f'Property {property} not defined in MANIFEST')
 
-    def add_widget_dict(self,
-                        name,
-                        widget_dict):
+    def add_widget_dict(
+        self,
+        name,
+        widget_dict
+    ):
+
         self.tasks[name]['widget_dict'] = widget_dict
 
-    def remove_widget_dict(self,
-                           name):
+    def remove_widget_dict(
+        self,
+        name
+    ):
+
         self.tasks[name]['widge_dict'] = dict()
 
-    def get_widget_value(self,
-                         name,
-                         property):
+    def get_widget_value(
+        self,
+        name,
+        property
+    ):
+
         widget = self.tasks[name]['widget_dict'][property]
 
         if isinstance(widget, QLineEdit):
@@ -221,6 +275,16 @@ class TaskWorker(QObject):
     progress = pyqtSignal(int)
 
     @property
+    def manifest_path(self):
+        return self._manifest_path
+
+    @manifest_path.setter
+    def manifest_path(self, path):
+        # Add checks for validity
+        print(f'Set manifest_path as {path}')
+        self._manifest_path = path
+
+    @property
     def task_name(self):
         return self._task_name
 
@@ -252,12 +316,13 @@ class TaskWorker(QObject):
 
         path_to_task_args = self.task_manager.get_path_to_json(task_name)
 
-        p = subprocess.Popen(['python', os.path.join(os.path.dirname(__file__), 'task_wrapper.py'), '--executable', path_to_executable, '--path_to_task_args', path_to_task_args]) #Pass wrapper_args: path to executable
+        p = subprocess.Popen(['pixi', 'run', '--manifest-path', self.manifest_path, os.path.join(os.path.dirname(__file__), 'task_wrapper.py'), '--executable', path_to_executable, '--path_to_task_args', path_to_task_args]) #Pass wrapper_args: path to executable
         p.wait()
 
         logger.info('Finished running subprocess')
 
         return task_name
+
 
 class TasksQWidget(QWidget):
     def __init__(self, napari_viewer):
@@ -267,6 +332,10 @@ class TasksQWidget(QWidget):
         self.task_manager = FractalTaskManager()
 
         # ---------------- Main container ----------------
+        ### Add PackageImporter
+        self.package_importer = PackageImporter()
+
+        ### Core widget components
         self.main_container = QWidget()
         main_layout = QVBoxLayout()
         main_layout.setSpacing(15)
@@ -388,15 +457,27 @@ class TasksQWidget(QWidget):
                 self._image_layers.addItem(layer.name)
 
     def _select_workflow_file(self):
-        path_to_workflow = QFileDialog().getOpenFileName(self, "Select workflow file", ".",
-                                                         "workflow specs (*.json)")[0]
+        # Open workflow package with PackageImporter
+
+        path_to_package = QFileDialog().getOpenFileName(self, "Select workflow package", ".",
+                                                         "workflow specs (*.tar.gz)")[0]
+
+        self.package_importer.open_package(path_to_package)
+
+        path_to_workflow = self.package_importer.loaded_packages[self.package_importer.package_name]['manifest_path']
+
+        print(os.path.split(path_to_workflow)[0])
 
         workflow_args = self._get_json_params(path_to_workflow)
 
         for task in workflow_args["task_list"]:
-            if task.get("category") in INCLUDE_CATEGORIES:
+            # if task.get("category") in INCLUDE_CATEGORIES:
+            is_parallel = True if task['type'] == "parallel" else False
+
+            if is_parallel:
                 self.workflow_combo_box.addItem(task["name"])
                 self.task_manager.add_task(name=task["name"],
+                                           package_name=self.package_importer.package_name,
                                            parent_dir=os.path.split(path_to_workflow)[0],
                                            executable_parallel=task["executable_parallel"],
                                            properties=task["args_schema_parallel"]["properties"],
@@ -462,16 +543,41 @@ class TasksQWidget(QWidget):
         #   create new thread
         self._update_execute_buttons(is_enabled=False)
 
-        self.thread = QThread(parent=self)
-        self.worker = TaskWorker()
-        self.worker.task_name = task_name
-        self.worker.task_manager = self.task_manager
-        self.worker.moveToThread(self.thread)
 
-        self.thread.started.connect(self.worker.run)
-        self.worker.finished.connect(self._fetch_subprocess_output)
+        package_name = self.task_manager.get_package_name(task_name)
+        manifest_path = self.package_importer.loaded_packages[package_name]['pixi_manifest_path']
+        print('Launching subprocess...')
+        path_to_executable = self.task_manager.get_executable_path(task_name)
+        print(path_to_executable)
 
+        path_to_task_args = self.task_manager.get_path_to_json(task_name)
+
+<<<<<<< HEAD
         self.thread.start()
+=======
+        print(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}')
+        p = subprocess.Popen(f'pixi run --manifest-path {manifest_path} python {os.path.join(os.path.dirname(__file__), "task_wrapper.py")} --executable {path_to_executable} --path_to_task_args {path_to_task_args}', shell=True) #Pass wrapper_args: path to executable
+        p.wait()
+
+        print('Finished running subprocess')
+        self._fetch_subprocess_output(task_name)
+        # self.thread = QThread(parent=self)
+        # self.worker = TaskWorker()
+        # self.worker.task_name = task_name
+        # self.worker.manifest_path = self.package_importer.loaded_packages[package_name]['pixi_manifest_path']
+        # self.worker.task_manager = self.task_manager
+        # self.worker.moveToThread(self.thread)
+        #
+        # self.thread.started.connect(self.worker.run)
+        # self.worker.finished.connect(self._fetch_subprocess_output)
+        #
+        # self.thread.start()
+        # QLabel describing state of progress
+        # self.thread.finished.connect(
+        #     lambda: self.stepLabel.setText("Long-Running Step: 0")
+        # )
+        #
+>>>>>>> c9515e347b1b36b430d0f9ce51736624a60a1250
 
     def _task_tab_exists(self, task_name):
         for child_widget in self.tab_container.findChildren(QWidget):
