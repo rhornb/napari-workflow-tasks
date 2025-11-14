@@ -45,14 +45,14 @@ class PackageImporter:
         file.close()
 
         self.package_name = '.'.join(os.path.basename(fpath).split('.')[:-2])
-        toml_data = self._open_toml_file()
+        toml_data, toml_path = self._open_toml_file()
         self.src_path, manifest_path = self._get_paths(toml_data)
 
         in_pixi_env = False
         if not self._toml_has_pixi(toml_data):
             pixi_manifest_path = self._make_pixi_env()
         else:
-            pixi_manifest_path = manifest_path
+            pixi_manifest_path = toml_path
 
         self.loaded_packages[self.package_name] = {'src_path': self.src_path, 'manifest_path': manifest_path, 'pixi_manifest_path': pixi_manifest_path}
 
@@ -61,10 +61,11 @@ class PackageImporter:
     def _open_toml_file(
         self,
     ):
-        with open(os.path.join(self.wf_dir, self.package_name, 'pyproject.toml'), 'rb') as f:
+        path = os.path.join(self.wf_dir, self.package_name, 'pyproject.toml')
+        with open(path, 'rb') as f:
             data = tomllib.load(f)
 
-        return data
+        return data, path
 
     def _toml_has_pixi(
         self,
